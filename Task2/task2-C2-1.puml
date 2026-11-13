@@ -1,0 +1,51 @@
+@startuml C2_Main_Microservices_Edge
+!include ../C4_Component.puml
+
+title Диаграмма контейнеров (C2) — Вариант 1: Микросервисы на Edge с RabbitMQ
+
+System_Ext(farm_cameras, "Видеокамеры фермы", "RTSP-потоки")
+System_Ext(farm_hardware, "Кормушки, Поилки, Фильтры", "Протоколы автоматики (Modbus, MQTT)")
+Person(operator, "Дежурный оператор", "Персонал на ферме")
+System_Ext(central_kafka, "Центральная Kafka", "Корпоративная шина холдинга")
+
+Container_Boundary(edge_server, "Локальный Сервер Фермы (MVP)") {
+    
+    Container(video_ingestion, "Video Ingestion Service", "Go / C++", "Захват потоков, нарезка кадров, запись в Shared Memory")
+    Container(ai_inference, "AI Inference Service", "Python", "Запуск партнерской ИИ-модели. Анализ кадров")
+    
+    Container(rabbitmq, "Локальный брокер сообщений", "RabbitMQ", "Шина обмена локальными событиями и командами")
+    
+    Container(feeding_service, "Feeding & Water Service", "Java / Spring", "Логика автоматического кормления и мониторинга фильтров")
+    Container(iot_gateway, "IoT Gateway", "Go", "Транслятор протоколов между устройствами и RabbitMQ")
+    
+    Container(alert_service, "Alerting Service", "Go", "Обработка критических триггеров, отправка локальных алейров")
+    Container(sync_agent, "Sync Agent", "Python / Go", "Контроль сети, отправка накопленных данных в центр")
+    
+    ContainerDb(local_db, "Локальная БД", "PostgreSQL / TimescaleDB", "Хранение настроек, кэша метрик и логов инцидентов")
+}
+
+' Потоки видео данных (High Performance)
+Rel(farm_cameras, video_ingestion, "Стриминг видео", "RTSP")
+Rel_D(video_ingestion, ai_inference, "Передача кадров", "Shared Memory / IPC")
+
+' Публикация событий в RabbitMQ
+Rel(ai_inference, rabbitmq, "Инциденты (драка, задавливание)", "AMQP / JSON")
+Rel(iot_gateway, rabbitmq, "Телеметрия с датчиков", "AMQP")
+
+' Оркестрация через RabbitMQ
+Rel(rabbitmq, alert_service, "Подписка на алерты", "AMQP")
+Rel(rabbitmq, feeding_service, "События датчиков корма", "AMQP")
+Rel(feeding_service, rabbitmq, "Команды на включение кормушек", "AMQP")
+Rel(rabbitmq, iot_gateway, "Маршрутизация команд", "AMQP")
+
+' Взаимодействие с устройствами
+Rel(iot_gateway, farm_hardware, "Команды и опрос датчиков", "Modbus TCP / MQTT")
+Rel(alert_service, operator, "Мгновенное оповещение (<5 сек)", "SMS-шлюз / Локальный UI")
+
+' Работа с данными и синхронизация
+Rel(feeding_service, local_db, "Запись метрик и остатков", "SQL")
+Rel(alert_service, local_db, "Логирование инцидентов", "SQL")
+Rel_D(sync_agent, local_db, "Чтение кэша для отправки", "SQL")
+Rel_D(sync_agent, central_kafka, "Пакетная репликация при наличии сети (лаг < 10 мин)", "Kafka Protocol / 4G")
+
+@enduml

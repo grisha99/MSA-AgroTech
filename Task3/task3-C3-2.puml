@@ -1,0 +1,35 @@
+@startuml C3_Alternative_Gateway_Components
+!include ../C4_Component.puml
+
+title Диаграмма компонентов (C3) — Вариант 2 (Тонкий шлюз)
+
+System_Ext(smart_cameras, "Умные ИИ-камеры", "Отправка JSON событий")
+ContainerDb(sqlite_db, "Локальный кэш", "SQLite", "Файловая БД")
+System_Ext(central_kafka, "Центральная Kafka", "Шина холдинга")
+
+Container_Boundary(thin_gateway_app, "Thin Gateway Application (Single Binary)") {
+    
+    Component(http_mqtt_server, "IoT Receiver Engine", "Go (net/http & Eclipse Paho)", "Эндпоинты для вебхуков камер и подписка на топики Modbus/MQTT")
+    
+    Component(in_memory_bus, "In-Memory Event Router", "Go Channels", "Каналы и горутины распределения сообщений внутри памяти")
+    
+    Component(feeding_logic, "Feeding Business Controller", "Go Logic", "Проверка расписания, управление реле кормушек через исполнительный модуль")
+    Component(alert_dispatcher, "Local Alert Dispatcher", "Go Logic", "Формирование мгновенных алертов для SMS/локального экрана")
+    
+    Component(sqlite_writer, "SQLite Storage Manager", "Go (go-sqlite3)", "Асинхронная запись событий и метрик на диск в режиме WAL")
+    Component(batch_uploader, "Kafka Sync Worker", "Go", "Репликация накопленных данных из SQLite в центральную Kafka при наличии сети")
+}
+
+' Взаимосвязи компонентов внутри единого процесса
+Rel(smart_cameras, http_mqtt_server, "Шлют инциденты", "HTTP POST / MQTT")
+Rel(http_mqtt_server, in_memory_bus, "Публикует событие в канал", "Go Channel")
+
+Rel(in_memory_bus, feeding_logic, "Передает метрики датчиков", "Go Channel Subscription")
+Rel(in_memory_bus, alert_dispatcher, "Передает аварийные триггеры", "Go Channel Subscription")
+Rel(in_memory_bus, sqlite_writer, "Передает все логи и события", "Go Channel Subscription")
+
+Rel(batch_uploader, sqlite_db, "Выбирает пачки (Read/Delete)", "SQL")
+Rel(sqlite_writer, sqlite_db, "Пишет логи", "SQL")
+Rel(batch_uploader, central_kafka, "Синхронизирует пакеты (<10 мин)", "Kafka Protocol")
+
+@enduml

@@ -1,0 +1,307 @@
+@startuml C4_Main_Edge_Code
+title Диаграмма классов (C4) — Video Ingestion Service (Java Style не силен в других языках)
+
+package "agrotechx\nJava Style не силен в других языках" as com.agrotechx {
+
+    package "ingestion\nVideo Ingestion Service" as video.ingestion {
+        class CameraConfigEntity {
+            - UUID id
+            - String rtspUrl
+            - int targetFps
+            - int width
+            - int height
+            - boolean active
+        }
+    
+        interface CameraConfigRepository {
+            + List<CameraConfigEntity> findAllByActiveTrue()
+        }
+    
+        class StreamIngestionManager {
+            - CameraConfigRepository configRepository
+            - ExecutorService streamThreadPool
+            + void startAllStreams()
+            + void restartStream(UUID cameraId)
+        }
+    
+        class RtspStreamWorker implements Runnable {
+            - CameraConfigEntity config
+            - FrameDecoderProcessor decoder
+            - SharedMemoryBufferWriter shmWriter
+            + void run()
+        }
+    
+        class FrameDecoderProcessor {
+            + byte[] decodeFrame(Frame rawFrame, int w, int h)
+        }
+    
+        class SharedMemoryBufferWriter {
+            - MappedByteBuffer memoryBuffer
+            - Semaphore ipcSemaphore
+            + void writeFrameToBuffer(UUID cameraId, byte[] frameBytes)
+        }
+    
+        StreamIngestionManager --> CameraConfigRepository
+        StreamIngestionManager o-- RtspStreamWorker : управляет потоками
+        RtspStreamWorker --> FrameDecoderProcessor : декодирует кадр
+        RtspStreamWorker --> SharedMemoryBufferWriter : пишет в RAM
+    }
+
+    package "inference\nAI Inference Service" as ai.inference {
+    
+        class BoundingBox {
+            - String label
+            - float confidence
+            - int x
+            - int y
+            - int width
+            - int height
+        }
+    
+        class IncidentEventDto {
+            - UUID incidentId
+            - UUID cameraId
+            - IncidentType type
+            - LocalDateTime detectedAt
+            - String snapshotPath
+        }
+    
+        enum IncidentType {
+            FIGHTING
+            PIGLET_CRUSHING
+            ANIMAL_DEATH
+        }
+    
+        class SharedMemoryFrameReader {
+            - MappedByteBuffer memoryBuffer
+            - Semaphore ipcSemaphore
+            + byte[] readNextFrame()
+        }
+    
+        class OnnxModelRunner {
+            - OrtEnvironment env
+            - OrtSession session
+            + List<BoundingBox> predict(byte[] frameData)
+        }
+    
+        class BehaviorAnalyticsService {
+            - IncidentEventPublisher publisher
+            + void analyzeDetections(UUID cameraId, List<BoundingBox> boxes)
+            - boolean detectPigletCrushing(List<BoundingBox> boxes)
+            - boolean detectFighting(List<BoundingBox> boxes)
+        }
+    
+        class IncidentEventPublisher {
+            - RabbitTemplate rabbitTemplate
+            + void publishCriticalIncident(IncidentEventDto event)
+        }
+    
+        SharedMemoryFrameReader ..> OnnxModelRunner : передает кадр
+        OnnxModelRunner ..> BoundingBox : возвращает
+        BehaviorAnalyticsService --> OnnxModelRunner
+        BehaviorAnalyticsService --> IncidentEventPublisher
+        IncidentEventPublisher ..> IncidentEventDto : отправляет в AMQP
+    }
+    
+    package "gateway\n IoT Gateway" as iot.gateway {
+    
+        class HardwareCommandDto {
+            - String deviceId
+            - ProtocolType protocol
+            - String action
+            - Map<String, Object> params
+        }
+    
+        class TelemetryPayloadDto {
+            - String deviceId
+            - String metricName
+            - double value
+            - Instant timestamp
+        }
+    
+        interface DeviceProtocolDriver {
+            + boolean supports(ProtocolType type)
+            + void sendCommand(HardwareCommandDto command)
+        }
+    
+        class ModbusTcpDriver implements DeviceProtocolDriver {
+            - ModbusMaster modbusMaster
+            + boolean supports(ProtocolType type)
+            + void sendCommand(HardwareCommandDto command)
+            + void pollRegistersScheduled()
+        }
+    
+        class MqttDeviceDriver implements DeviceProtocolDriver {
+            - MqttClient mqttClient
+            + boolean supports(ProtocolType type)
+            + void sendCommand(HardwareCommandDto command)
+            + void messageArrived(String topic, MqttMessage msg)
+        }
+    
+        class CommandRabbitListener {
+            - List<DeviceProtocolDriver> drivers
+            + void onCommandReceived(HardwareCommandDto command)
+        }
+    
+        class TelemetryRabbitPublisher {
+            - RabbitTemplate rabbitTemplate
+            + void publishTelemetry(TelemetryPayloadDto payload)
+        }
+    
+        CommandRabbitListener o-- DeviceProtocolDriver : выбирает драйвер
+        ModbusTcpDriver --> TelemetryRabbitPublisher : шлет данные опроса
+        MqttDeviceDriver --> TelemetryRabbitPublisher : шлет данные топиков
+    }
+    
+    package "feeding\n Feeding & Water Service" as feeding {
+    
+        class FeedStockEntity {
+            - Long id
+            - String bunkerId
+            - double currentWeightKg
+            - double estimatedDaysLeft
+            - LocalDateTime updatedAt
+        }
+    
+        class FilterMetricEntity {
+            - Long id
+            - String filterId
+            - double pressureDelta
+            - boolean needsCleaning
+            - LocalDateTime recordedAt
+        }
+    
+        interface FeedStockRepository {
+            + Optional<FeedStockEntity> findByBunkerId(String bunkerId)
+            + FeedStockEntity save(FeedStockEntity entity)
+        }
+    
+        interface FilterMetricRepository {
+            + FilterMetricEntity save(FilterMetricEntity entity)
+        }
+    
+        class TelemetryEventListener {
+            - WaterFilterService waterService
+            - FeedForecastService forecastService
+            + void handleTelemetry(TelemetryPayloadDto dto)
+        }
+    
+        class FeedingSchedulerService {
+            - HardwareCommandPublisher commandPublisher
+            + void executeScheduledFeeding()
+        }
+    
+        class WaterFilterService {
+            - FilterMetricRepository repository
+            - HardwareCommandPublisher commandPublisher
+            + void evaluateFilterPressure(String filterId, double delta)
+        }
+    
+        class FeedForecastService {
+            - FeedStockRepository repository
+            + void recalculateConsumption(String bunkerId, double currentWeight)
+        }
+    
+        class HardwareCommandPublisher {
+            - RabbitTemplate rabbitTemplate
+            + void sendFeedCommand(String feederId, double portionKg)
+            + void sendWaterCommand(String valveId)
+        }
+    
+        TelemetryEventListener --> WaterFilterService
+        TelemetryEventListener --> FeedForecastService
+        FeedingSchedulerService --> HardwareCommandPublisher
+        WaterFilterService --> FilterMetricRepository
+        WaterFilterService --> HardwareCommandPublisher
+        FeedForecastService --> FeedStockRepository
+    }
+    
+    package "alerting\n Alerting Service" as alerting {
+    
+        class IncidentLogEntity {
+            - UUID id
+            - String type
+            - String description
+            - boolean smsSent
+            - boolean syncedToCenter
+            - LocalDateTime createdAt
+        }
+    
+        interface IncidentLogRepository {
+            + IncidentLogEntity save(IncidentLogEntity entity)
+        }
+    
+        class CriticalIncidentListener {
+            - AlertRoutingService routingService
+            + void onCriticalIncident(IncidentEventDto event)
+        }
+    
+        class AlertRoutingService {
+            - IncidentLogRepository repository
+            - LocalSmsModemClient smsClient
+            - OperatorWebSocketNotifier wsNotifier
+            + void processAndNotify(IncidentEventDto event)
+        }
+    
+        class LocalSmsModemClient {
+            - SerialPort gsmModemPort
+            + boolean sendAtSmsCommand(String phoneNumber, String text)
+        }
+    
+        class OperatorWebSocketNotifier {
+            - SimpMessagingTemplate messagingTemplate
+            + void pushAlertToLocalUi(IncidentEventDto event)
+        }
+    
+        CriticalIncidentListener --> AlertRoutingService
+        AlertRoutingService --> IncidentLogRepository : сохраняет в БД
+        AlertRoutingService --> LocalSmsModemClient : шлет SMS (<5 сек)
+        AlertRoutingService --> OperatorWebSocketNotifier : пушит в браузер
+    }
+    
+    package "sync\n Sync Agent" as sync {
+    
+        class OutboxSyncRecordEntity {
+            - Long id
+            - String topicName
+            - String jsonPayload
+            - SyncStatus status
+            - LocalDateTime createdAt
+        }
+    
+        enum SyncStatus {
+            PENDING
+            SENT
+            FAILED
+        }
+    
+        interface OutboxRepository {
+            + List<OutboxSyncRecordEntity> findTop1000ByStatusOrderByCreatedAtAsc(SyncStatus status)
+            + void saveAll(List<OutboxSyncRecordEntity> records)
+        }
+    
+        class NetworkHealthService {
+            - String centralBrokerHost
+            + boolean isCentralNetworkAvailable()
+        }
+    
+        class ReplicationScheduler {
+            - NetworkHealthService healthService
+            - OutboxRepository outboxRepository
+            - CentralKafkaProducer kafkaProducer
+            + void syncBatchToCenter()
+        }
+    
+        class CentralKafkaProducer {
+            - KafkaTemplate<String, String> kafkaTemplate
+            + CompletableFuture<SendResult> sendBatchMessage(String topic, String key, String payload)
+        }
+    
+        ReplicationScheduler --> NetworkHealthService : проверяет связь (4G/WAN)
+        ReplicationScheduler --> OutboxRepository : читает кэш (LIMIT 1000)
+        ReplicationScheduler --> CentralKafkaProducer : отправляет в Kafka
+        OutboxRepository ..> OutboxSyncRecordEntity
+    }
+}
+
+@enduml

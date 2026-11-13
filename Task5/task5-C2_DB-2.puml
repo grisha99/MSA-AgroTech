@@ -1,0 +1,28 @@
+@startuml C2_Isolation_Variant_B_Separate_DB
+!include ../C4_Component.puml
+
+title C2: Вариант B — Изоляция на уровне отдельных БД (Выбранный вариант)
+
+Person(client_a, "Клиент А (Агрохолдинг)", "Операторы и руководители")
+Person(client_b, "Клиент Б (Фермерское хоз-во)", "Операторы и руководители")
+
+System_Boundary(saas_cloud, "Облачная SaaS-платформа АгроТех Х") {
+    Container(api_gw, "API Gateway & Tenant Router", "Kong / Envoy", "Валидация токенов, маршрутизация трафика")
+    Container(tenant_registry, "Tenant Management Service", "Java / Spring Boot", "Реестр клиентов, хранение строк подключения (Connection Strings) к БД тенантов")
+    Container(core_service, "Stateless Core Services", "Java / Spring Boot", "Динамический выбор пула соединений БД под текущий tenant_id")
+    Container(kafka, "Apache Kafka", "Kafka", "Изолированные топики на клиента: telemetry.tenant_a, telemetry.tenant_b")
+    
+    ContainerDb(db_tenant_a, "БД Клиента А", "PostgreSQL + ClickHouse", "Физически изолированные базы данных Клиента А")
+    ContainerDb(db_tenant_b, "БД Клиента Б", "PostgreSQL + ClickHouse", "Физически изолированные базы данных Клиента Б")
+    ContainerDb(minio, "Object Storage", "MinIO / S3", "Изолированные бакеты (bucket-tenant-a, bucket-tenant-b) для видео/фото")
+}
+
+Rel(client_a, api_gw, "HTTPS / MQTT / Kafka TLS")
+Rel(client_b, api_gw, "HTTPS / MQTT / Kafka TLS")
+Rel(api_gw, core_service, "Передача запроса с контекстом тенанта (X-Tenant-ID)")
+Rel(core_service, tenant_registry, "Запрос метаданных и DSN базы клиента (кэш Redis)")
+Rel(core_service, kafka, "Чтение/запись в топики тенанта")
+Rel(core_service, db_tenant_a, "Изолированный пул соединений А", "JDBC / Native")
+Rel(core_service, db_tenant_b, "Изолированный пул соединений Б", "JDBC / Native")
+Rel(core_service, minio, "Запись медиафайлов в бакет тенанта", "S3 API")
+@enduml

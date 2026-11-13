@@ -1,0 +1,34 @@
+@startuml C1_SaaS_ToBe
+!include ../C4_Component.puml
+
+title C1: Контекстная диаграмма SaaS-платформы «АгроТех Х» (To-Be)
+
+Person(tenant_admin, "Администратор клиента", "Регистрация, настройка тарифов, управление фермами в Self-Service")
+Person(farm_operator, "Оператор фермы", "Мониторинг поголовья, реакция на инциденты")
+Person(client_dev, "Разработчик клиента", "Интеграция ERP клиента через API и Dev-портал")
+Person(ml_engineer, "ML-инженер АгроТех Х", "Обучение новых нейросетей на обезличенных данных")
+
+System(saas_platform, "SaaS-платформа «АгроТех Х»", "Облачная мультитенантная платформа мониторинга животноводства, аналитики и биллинга")
+
+System_Boundary(client_site, "Контур Клиента (Ферма Агрохолдинга)") {
+    System(edge_agent, "Локальный Edge-сервер (Толстый агент)", "Локальный ИИ-анализ видео, управление кормушками/поилками, автономная работа и буферизация")
+    System_Ext(farm_iot, "Камеры и IoT-оборудование", "IP-камеры (RTSP), кормушки, поилки, датчики фильтров (Modbus/MQTT)")
+    System_Ext(client_erp, "ERP / 1С Клиента", "Учетная система агрохолдинга")
+}
+
+System_Ext(ru_payments, "Российские платёжные системы", "ЮKassa / СБП / Банковское API для расчетов с юрлицами")
+System_Ext(notif_providers, "Провайдеры уведомлений", "SMS-шлюзы, Telegram Bot API, Email")
+
+Rel(tenant_admin, saas_platform, "Управляет подпиской, фермами и правами доступа", "HTTPS")
+Rel(farm_operator, saas_platform, "Просматривает дашборды и алерты в веб/мобильном приложении", "HTTPS / WSS")
+Rel(farm_operator, edge_agent, "Получает мгновенные локальные алерты (<5 сек) при потере интернета", "LAN / GSM")
+Rel(client_dev, saas_platform, "Изучает документацию на Dev-портале, настраивает API-ключи", "HTTPS")
+Rel(ml_engineer, saas_platform, "Выгружает обезличенные датасеты для дообучения моделей", "Internal VPN")
+
+Rel(farm_iot, edge_agent, "Передача видеопотоков и телеметрии; прием команд управления", "RTSP / Modbus / MQTT")
+Rel(edge_agent, saas_platform, "Синхронизация метрик, инцидентов и медиа; получение конфигураций", "TLS / Kafka / HTTPS")
+Rel(saas_platform, client_erp, "Передача данных о поголовье, расходе корма и инцидентах", "REST API / Webhooks")
+Rel(saas_platform, ru_payments, "Проведение платежей, выставление счетов, проверка статусов оплаты", "HTTPS API")
+Rel(saas_platform, notif_providers, "Отправка облачных уведомлений пользователям", "HTTPS")
+
+@enduml

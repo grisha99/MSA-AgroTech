@@ -1,0 +1,46 @@
+@startuml C2_Alternative_Smart_Cameras
+
+!include ../C4_Component.puml
+
+title Диаграмма контейнеров (C2) — Вариант 2: Умные камеры и Тонкий шлюз
+
+System_Ext(smart_cameras, "Умные ИИ-камеры (Smart IP)", "Исполнение нейросети на борту (NPU). Передача метаданных событий")
+System_Ext(farm_hardware, "Кормушки, Поилки, Фильтры", "Протоколы автоматики (Modbus, MQTT)")
+Person(operator, "Дежурный оператор", "Персонал на ферме")
+System_Ext(central_kafka, "Центральная Kafka холдинга", "Корпоративная шина в периметре Цифровой Платформы")
+
+Container_Boundary(thin_gateway, "Локальный Шлюз Фермы (Тонкий агент)") {
+    
+    Container(iot_event_receiver, "IoT & Event Receiver", "Go", "Прием текстовых метаданных событий от умных камер и IoT устройств")
+    
+    Container(local_router, "Internal Event Router", "Internal In-Memory Bus", "Внутренний распределитель событий внутри процесса шлюза")
+    
+    Container(feeding_controller, "Feeding Controller", "Python / Go", "Легковесный модуль логики кормления и поения")
+    Container(local_alert_manager, "Local Alert Manager", "Go", "Мгновенное локальное оповещение дежурного при авариях")
+    
+    Container(buffer_sync_service, "Buffer & Sync Service", "Go", "Буферизация текстовых событий на диск при отсутствии связи")
+    
+    ContainerDb(sqlite_db, "Локальный Кэш (SQLite)", "SQLite", "Компактная файловая БД для хранения состояния и неотправленных пакетов")
+}
+
+' Взаимодействие с умными устройствами на ферме
+Rel(smart_cameras, iot_event_receiver, "Отправка метаданных инцидентов (драка, задавливание)", "MQTT / HTTP JSON")
+Rel(iot_event_receiver, farm_hardware, "Опрос датчиков и управление реле", "Modbus TCP / MQTT")
+Rel(farm_hardware, iot_event_receiver, "Данные телеметрии (фильтры, расход корма)", "Modbus / MQTT")
+
+' Внутренняя маршрутизация (In-Memory)
+Rel(iot_event_receiver, local_router, "Передача сырых событий", "In-Process Call")
+Rel(local_router, feeding_controller, "Данные о корме", "In-Process Call")
+Rel(local_router, local_alert_manager, "Критические триггеры", "In-Process Call")
+Rel(feeding_controller, iot_event_receiver, "Команды автоматике", "In-Process Call")
+
+' Оповещение и локальное хранение
+Rel(local_alert_manager, operator, "Мгновенное оповещение (<5 сек)", "SMS-шлюз / Локальный UI")
+Rel(feeding_controller, sqlite_db, "Сохранение срезов метрик", "SQL")
+Rel(local_router, buffer_sync_service, "Логирование всех событий для центра", "In-Process Call")
+
+' Буферизация и синхронизация с холдингом
+Rel(buffer_sync_service, sqlite_db, "Чтение / запись буфера в офлайне", "SQL")
+Rel_D(buffer_sync_service, central_kafka, "Отправка накопленных событий (лаг < 10 мин)", "Kafka Protocol / 4G")
+
+@enduml
