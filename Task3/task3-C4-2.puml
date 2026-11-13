@@ -1,0 +1,171 @@
+@startuml C4_Alternative_Gateway_Code
+title Диаграмма кода (C4) — Вариант 2: Пакеты и интерфейсы Тонкого шлюза (Go)
+
+title Диаграмма кода (C4) — Реализация локального шлюза в стиле Java (Spring Boot)
+
+package "ru.agrotechx.gateway" {
+
+    ' === Слой модели данных (Domain & DTO) ===
+    package "model" {
+        enum EventType {
+            FIGHT_DETECTED
+            PIGLET_CRUSHING
+            FEED_LEVEL_LOW
+            WATER_IS_EMPTY
+        }
+
+        class FarmEvent <<Record / DTO>> {
+            - UUID eventId
+            - String deviceId
+            - EventType type
+            - Instant timestamp
+            - Map<String, Object> payload
+            - boolean isCritical()
+        }
+
+        class OutboxEntity <<JPA Entity>> {
+            - Long id
+            - String eventUuid
+            - String serializedJson
+            - SyncStatus status
+            - Instant createdAt
+        }
+    }
+
+    ' === Входной слой (Controllers & Listeners) ===
+    package "adapter.in" {
+        class SmartCameraWebhookController <<@RestController>> {
+            - ApplicationEventPublisher eventPublisher
+            + ResponseEntity<Void> onCameraAlert(CameraAlertDto dto)
+        }
+
+        class MqttTelemetryListener <<@Component>> {
+            - ApplicationEventPublisher eventPublisher
+            + void handleMessage(String topic, byte[] payload)
+        }
+    }
+
+    ' === Ядро бизнес-логики (Services & Strategy) ===
+    package "service" {
+        class FeedingControlService <<@Service>> {
+            - List<HardwareDriver> drivers
+            - OutboxRepository outboxRepository
+            + @EventListener void onTelemetryEvent(FarmEvent event)
+            + @Scheduled void checkFeedingSchedule()
+            - void dispenseFeed(String feederId, double amount)
+        }
+
+        class LocalAlertService <<@Service>> {
+            - SmsGatewayClient smsClient
+            - LocalDashboardWebSocket wsClient
+            + @EventListener(condition = "#event.critical") void triggerEmergencyAlert(FarmEvent event)
+        }
+
+        interface HardwareDriver {
+            + boolean supports(String vendorProtocol)
+            + void sendCommand(String deviceId, Command cmd)
+        }
+
+        class ModbusHardwareDriver <<@Component>> {
+            + boolean supports(String vendorProtocol)
+            + void sendCommand(String deviceId, Command cmd)
+        }
+
+        class MqttHardwareDriver <<@Component>> {
+            + boolean supports(String vendorProtocol)
+            + void sendCommand(String deviceId, Command cmd)
+        }
+    }
+
+    ' === Слой хранения и синхронизации (Persistence & Outbox) ===
+    package "persistence" {
+        interface OutboxRepository <<JpaRepository>> {
+            + List<OutboxEntity> findTop100ByStatusOrderByCreatedAtAsc(SyncStatus status)
+        }
+
+        class EventPersistenceListener <<@Component>> {
+            - OutboxRepository repository
+            - ObjectMapper objectMapper
+            + @EventListener void saveToLocalBuffer(FarmEvent event)
+        }
+
+        class KafkaBatchSyncJob <<@Component>> {
+            - OutboxRepository repository
+            - KafkaTemplate<String, String> kafkaTemplate
+            + @Scheduled(fixedDelay = 60000) void syncEventsToCentralHub()
+        }
+    }
+}
+
+' === Связи между классами ===
+SmartCameraWebhookController ..> FarmEvent : создает
+MqttTelemetryListener ..> FarmEvent : создает
+
+FeedingControlService o-- HardwareDriver : внедряет список (DI)
+ModbusHardwareDriver ..|> HardwareDriver : реализует
+MqttHardwareDriver ..|> HardwareDriver : реализует
+
+FeedingControlService ..> FarmEvent : слушает (@EventListener)
+LocalAlertService ..> FarmEvent : слушает критические (@EventListener)
+EventPersistenceListener ..> FarmEvent : слушает все (@EventListener)
+
+EventPersistenceListener --> OutboxRepository : сохраняет (SQLite)
+KafkaBatchSyncJob --> OutboxRepository : читает батчами и удаляет
+KafkaBatchSyncJob ..> OutboxEntity : обрабатывает
+/'package "domain" {
+    interface EventBus {
+        + Publish(event: Event)
+        + Subscribe(topic: string, ch: chan Event)
+    }
+    
+    interface Repository {
+        + SaveEvent(event: Event) error
+        + GetUnsentEvents(limit: int) ([]Event, error)
+        + MarkAsSent(ids: []int) error
+    }
+    
+    struct Event {
+        + ID: int
+        + FarmID: string
+        + Type: string
+        + Payload: string
+        + Timestamp: int64
+    }
+}
+
+package "gateway" {
+    class EventRouter {
+        - subscribers: map[string][]chan Event
+        + Publish(event: Event)
+        + Subscribe(topic: string, ch: chan Event)
+    }
+    EventRouter ..|> EventBus
+}
+
+package "delivery/http" {
+    class CameraHandler {
+        - bus: EventBus
+        + HandleWebhook(w: ResponseWriter, r: Request)
+    }
+    CameraHandler --> EventBus
+}
+
+package "repository/sqlite" {
+    class SQLiteRepo {
+        - db: *sql.DB
+        + SaveEvent(event: Event) error
+        + GetUnsentEvents(limit: int) ([]Event, error)
+    }
+    SQLiteRepo ..|> Repository
+}
+
+package "sync" {
+    class SyncWorker {
+        - repo: Repository
+        - kafkaClient: KafkaWriter
+        + StartSyncLoop()
+    }
+    SyncWorker --> Repository
+}'/
+
+@enduml

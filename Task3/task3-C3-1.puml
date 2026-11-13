@@ -1,0 +1,108 @@
+@startuml C3_Main_Edge_Components
+!include ../C4_Component.puml
+
+title Диаграмма компонентов (C3) — Вариант 1 (Толстый агент)
+
+Container(rabbitmq, "Локальный брокер", "RabbitMQ", "Шина обмена AMQP")
+ContainerDb(local_db, "Локальная БД", "TimescaleDB", "Хранение метрик и инцидентов")
+System_Ext(central_kafka, "Центральная Kafka", "Шина холдинга")
+System_Ext(farm_hardware, "Кормушки, Поилки, Фильтры", "Modbus / MQTT")
+Person(operator, "Дежурный оператор", "Персонал на ферме")
+
+Container_Boundary(video_ingestion, "Video Ingestion Service") {
+    Component(rtsp_client, "RTSP Stream Receiver", "Go / C++", "Подключение к камерам, декодирование потоков")
+    Component(shm_writer, "Shared Memory Writer", "C++", "Запись сырых кадров в буфер общей памяти")
+    Component(stream_registry, "Stream Registry", "Go", "Управление конфигурацией и адресами камер")
+    
+    Rel(rtsp_client, shm_writer, "Передает кадры")
+    Rel(stream_registry, rtsp_client, "Конфигурирует потоки")
+}
+
+Container_Boundary(ai_inference, "AI Inference Service") {
+    Component(shm_reader, "Shared Memory Reader", "Python / C++", "Вычитка кадров из буфера")
+    Component(nn_runner, "Neural Network Engine", "Python", "Исполнение партнерской модели ИИ")
+    Component(event_detector, "Event Detector & Filter", "Python", "Логика фильтрации ложных срабатываний и детекции теней")
+    Component(amqp_publisher, "AMQP Event Publisher", "Python", "Публикация подтвержденных инцидентов в RabbitMQ")
+    
+    Rel(shm_reader, nn_runner, "Передает изображения")
+    Rel(nn_runner, event_detector, "Возвращает обнаруженные события")
+    Rel(event_detector, amqp_publisher, "Формирует бизнес-событие")
+}
+
+Rel(amqp_publisher, rabbitmq, "Публикует инциденты", "AMQP")
+
+Container_Boundary(sync_agent, "Sync Agent") {
+    Component(db_poller, "Outbox Table Poller", "Go", "Периодический опрос таблицы неотправленных событий")
+    Component(network_monitor, "Network Health Checker", "Go", "Проверка доступности центрального контура (Ping / HTTP Heartbeat)")
+    Component(kafka_publisher, "Kafka Client", "Go", "Пакетная отправка сообщений с поддержкой TLS")
+    
+    Rel(db_poller, kafka_publisher, "Передает пачку событий при наличии сети")
+    Rel(network_monitor, db_poller, "Блокирует/разблокирует опрос при изменении статуса сети")
+}
+
+Container_Boundary(feeding_service, "Feeding & Water Service") {
+    Component(telemetry_consumer, "Telemetry Consumer", "Spring AMQP", "Принимает данные об уровнях корма и состоянии фильтров")
+    Component(schedule_orchestrator, "Feeding Schedule Orchestrator", "Spring Scheduling", "Запускает циклы кормления по расписанию")
+    Component(water_monitor, "Water Filter Monitor", "Java Core", "Анализирует данные по фильтрам/поилкам")
+    Component(forecasting_engine, "Feed Forecasting Engine", "Java Core", "Рассчитывает скорость поедания и прогнозирует дату истощения запасов")
+    Component(command_sender, "Hardware Command Sender", "Spring AMQP", "Публикует команды на включение/выключение кормушек")
+    
+    Rel(telemetry_consumer, water_monitor, "Передача данных фильтрации")
+    Rel(telemetry_consumer, forecasting_engine, "Передача текущих остатков корма")
+    Rel(schedule_orchestrator, command_sender, "Триггер начала кормления")
+    Rel(water_monitor, command_sender, "Команды для фильтров")
+}
+
+Container_Boundary(iot_gateway, "IoT Gateway") {
+    Component(rabbitmq_listener, "RabbitMQ Command Listener", "Go", "Слушает управляющие команды для периферийного оборудования")
+    Component(protocol_router, "Protocol Router", "Go", "Определяет целевой протокол для конкретного устройства")
+    Component(modbus_driver, "Modbus TCP Driver", "Go", "Формирует низкоуровневые Modbus-запросы (команды реле)")
+    Component(mqtt_client, "MQTT Telemetry Client", "Go", "Подписывается на топики датчиков / публикует команды")
+    Component(telemetry_publisher, "Telemetry Publisher", "Go", "Отправляет сырые данные датчиков обратно в шину")
+    
+    Rel(rabbitmq, rabbitmq_listener, "Подписка на команды управления", "AMQP")
+    Rel(rabbitmq_listener, protocol_router, "Передача команды")
+    Rel(protocol_router, modbus_driver, "Вызов (если устройство на Modbus)")
+    Rel(protocol_router, mqtt_client, "Вызов (если устройство на MQTT)")
+    
+    Rel(modbus_driver, farm_hardware, "Запись/Чтение регистров", "Modbus TCP")
+    Rel(farm_hardware, mqtt_client, "Публикация телеметрии / Прием команд", "MQTT")
+    
+    Rel(mqtt_client, telemetry_publisher, "Сырые данные датчиков")
+    Rel(modbus_driver, telemetry_publisher, "Данные периодического опроса")
+    Rel(telemetry_publisher, rabbitmq, "Публикация телеметрии", "AMQP (JSON)")
+}
+
+Container_Boundary(alert_service, "Alerting Service") {
+    Component(incident_consumer, "Incident Consumer", "Go", "Слушает критические инциденты от AI и IoT систем")
+    Component(alert_router, "Alert Router & Escalator", "Go", "Определяет приоритет и адресатов на основе политик")
+    Component(sms_gateway_client, "Local GSM/SMS Driver", "Go", "Взаимодействует с локальным USB-модемом/шлюзом")
+    Component(local_ui_ws, "WebSocket Server", "Go / Gorilla", "Мгновенно пушит алерты на локальный веб-интерфейс оператора")
+    Component(incident_logger, "Incident DB Logger", "Go", "Асинхронно записывает факт инцидента в базу данных")
+}
+
+Rel(rabbitmq, incident_consumer, "Подписка на алерты (критичные)", "AMQP")
+Rel(incident_consumer, alert_router, "Передача события")
+Rel(alert_router, sms_gateway_client, "Команда отправить SMS (при отсутствии Internet / высокой критичности)")
+Rel(alert_router, local_ui_ws, "Пуш-уведомление на экран")
+Rel(alert_router, incident_logger, "Логирование")
+
+Rel(sms_gateway_client, operator, "Локальное SMS (через GSM-сеть фермы)", "GSM / PDU")
+Rel(local_ui_ws, operator, "Звуковой/визуальный алерт в браузере", "WebSockets (<1 сек)")
+Rel(incident_logger, local_db, "Запись инцидента в журнал", "SQL")
+
+' Внешние связи компонентов
+System_Ext(farm_cameras, "IP-Камеры", "RTSP")
+Rel(farm_cameras, rtsp_client, "Стриминг", "RTSP")
+Rel(shm_writer, shm_reader, "Передача кадров без копирования", "Shared Memory")
+
+Rel(db_poller, local_db, "Выборка и удаление данных", "SQL")
+Rel(kafka_publisher, central_kafka, "Синхронизация данных (<10 мин)", "Kafka Protocol")
+
+Rel(rabbitmq, telemetry_consumer, "События датчиков и остатков", "AMQP")
+Rel(command_sender, rabbitmq, "Команды кормушкам/поилкам", "AMQP")
+Rel(water_monitor, local_db, "Сохранение метрик фильтров", "JDBC / JPA")
+Rel(forecasting_engine, local_db, "Запись прогнозов и остатков еды", "JDBC / JPA")
+
+
+@enduml
