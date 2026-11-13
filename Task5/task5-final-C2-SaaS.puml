@@ -1,0 +1,79 @@
+@startuml C2_SaaS_ToBe
+!include ../C4_Component.puml
+
+title C2: Контейнерная диаграмма SaaS-платформы «АгроТех Х» (To-Be)
+
+Person(tenant_user, "Пользователи Клиента", "Администратор, Оператор, Зоотехник")
+Person(client_dev, "Разработчик Клиента", "Интеграция по API")
+System_Ext(edge_agent, "Edge-сервер фермы (Толстый агент)", "Локальный контур фермы клиента")
+System_Ext(client_erp, "ERP / 1С Клиента", "Внешняя система клиента")
+System_Ext(ru_payments, "Платёжные шлюзы РФ", "ЮKassa / Банк API")
+
+System_Boundary(saas_cloud, "Облачная SaaS-платформа «АгроТех Х» (Kubernetes Cluster)") {
+    
+    ' Frontend & Portals
+    Container(web_app, "Web & Self-Service Portal", "React / TypeScript", "Личный кабинет клиента, дашборды ферм, управление подпиской")
+    Container(dev_portal, "Developer Portal", "Docusaurus / Redocly", "Документация OpenAPI, гайды по подключению Edge, Sandbox")
+    
+    ' Edge & Gateway Layer
+    Container(api_gateway, "API Gateway & Edge Ingress", "Kong / или Java Spring", "Единая точка входа, маршрутизация по tenant_id, mTLS для Edge")
+    Container(iam_service, "Identity & Access (IAM)", "Keycloak / или Java Spring", "Мультитенантная аутентификация (OIDC/OAuth2), RBAC, выпуск API-ключей")
+    
+    ' Core Business & Ingestion
+    Container(kafka, "Apache Kafka Cluster", "Kafka", "Шина событий с изолированными топиками на каждого тенанта")
+    Container(ingestion_service, "Edge Sync & Ingestion Service", "Go", "Прием пакетных данных от Edge-агентов, валидация, запись в Kafka и S3")
+    Container(core_livestock, "Core Livestock Service", "Java / Spring Boot", "Бизнес-логика мониторинга, управление расписанием кормления, агрегация")
+    Container(webhook_dispatcher, "Integration & Webhook Service", "Go", "Отправка событий в ERP клиентов (Webhooks) с гарантией доставки")
+    
+    ' Billing & Monetization
+    Container(metering_service, "Metering & Usage Collector", "Go", "Подсчет активных камер, ферм и трафика из Kafka для биллинга")
+    Container(billing_service, "Billing & Subscription Service", "Java / Spring Boot", "Тарифы, подписки, генерация счетов/актов, контроль лимитов")
+    Container(payment_adapter, "RU Payment Adapter", "Go", "Интеграция с ЮKassa, СБП и банковским API для юрлиц")
+    
+    ' ML Data Pipeline
+    Container(ml_anonymizer, "ML Data Anonymizer", "Python", "Очистка метаданных тенанта и подготовка датасетов для обучения ИИ")
+    
+    ' Storage Layer (Database-per-Tenant)
+    ContainerDb(control_db, "Control Plane DB", "PostgreSQL", "Реестр тенантов, строка подключения к БД тенанта, тарифы и биллинг")
+    ContainerDb(tenant_pg, "Tenant Operational DBs", "PostgreSQL Cluster", "Изолированные БД для каждого клиента (настройки, инциденты, поголовье)")
+    ContainerDb(tenant_ch, "Tenant Analytics DBs", "ClickHouse Cluster", "Изолированные базы временных рядов телеметрии и метрик клиентов")
+    ContainerDb(s3_storage, "Object Storage", "MinIO / S3", "Изолированные бакеты клиентов (видеоклипы инцидентов) + бакет ML-датасетов")
+}
+
+' Пользовательские потоки
+Rel(tenant_user, web_app, "Работа в платформе и биллинге", "HTTPS")
+Rel(tenant_user, edge_agent, "Получает мгновенные локальные алерты (<5 сек) при потере интернета", "LAN / GSM")
+Rel(client_dev, dev_portal, "Чтение документации", "HTTPS")
+Rel(web_app, api_gateway, "Вызовы REST API / WebSockets", "HTTPS")
+Rel(client_erp, api_gateway, "Запросы к Public REST API", "HTTPS (OAuth2)")
+
+' Авторизация и маршрутизация
+Rel(api_gateway, iam_service, "Проверка JWT / API-ключей", "OIDC")
+Rel(api_gateway, control_db, "Кэшированный поиск DSN базы тенанта", "Redis / SQL")
+
+' Потоки от Edge-агентов
+Rel(edge_agent, api_gateway, "Синхронизация пакетов данных и медиа", "mTLS / HTTPS / Kafka")
+Rel(api_gateway, ingestion_service, "Маршрутизация трафика от агентов")
+Rel(ingestion_service, kafka, "Публикация событий в топик тенанта")
+Rel(ingestion_service, s3_storage, "Сохранение видео/фото инцидентов в бакет тенанта", "S3 API")
+
+' Обработка бизнес-логики
+Rel(kafka, core_livestock, "Потребление событий ферм")
+Rel(core_livestock, tenant_pg, "Чтение/запись в изолированную БД клиента", "JDBC/JPA")
+Rel(core_livestock, tenant_ch, "Запись и агрегация метрик клиента", "TCP")
+Rel(kafka, webhook_dispatcher, "Подписка на бизнес-события")
+Rel(webhook_dispatcher, client_erp, "Отправка Webhooks (HMAC)", "HTTPS POST")
+
+' Биллинг и монетизация
+Rel(kafka, metering_service, "Сбор метрик активности камер и агентов")
+Rel(metering_service, billing_service, "Передача агрегатов потребления", "gRPC")
+Rel(api_gateway, billing_service, "Управление подпиской из Self-Service")
+Rel(billing_service, control_db, "Хранение счетов, подписок и балансов", "JDBC/JPA")
+Rel(billing_service, payment_adapter, "Запрос на оплату / выставление счета")
+Rel(payment_adapter, ru_payments, "Взаимодействие с платёжными шлюзами", "HTTPS")
+
+' Сбор данных для ML
+Rel(kafka, ml_anonymizer, "Поток обезличенных событий и ссылок на кадры")
+Rel(ml_anonymizer, s3_storage, "Сохранение обезличенных датасетов", "S3 API")
+
+@enduml

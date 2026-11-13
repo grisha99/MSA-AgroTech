@@ -1,0 +1,46 @@
+@startuml C2_Integration_Example_AgroTechX
+!include ../C4_Component.puml
+
+title C2: Пример интеграции — Холдинг «АгроТех Х» как клиент SaaS-платформы
+
+System_Boundary(agrotech_farm, "Свинокомплекс №1 «АгроТех Х» (Локальный контур)") {
+    System_Ext(cameras, "IP-камеры (50 шт.)", "RTSP")
+    System_Ext(iot_devices, "Кормушки и фильтры воды", "Modbus / MQTT")
+    
+    Container(edge_server, "Edge-сервер («Толстый агент»)", "Docker / Linux", "Video Ingestion, AI Inference, RabbitMQ, Feeding Service, Sync Agent")
+    Person(local_op, "Дежурный оператор фермы", "Персонал на объекте")
+}
+
+System_Boundary(agrotech_hq, "Центральный контур Холдинга «АгроТех Х» (Корпоративный IT)") {
+    Container(corp_kafka, "Корпоративная шина Холдинга", "Apache Kafka", "Центральная шина интеграции всех систем холдинга")
+    Container(erp_1c, "ERP (1С:Агро)", "", "Учет поголовья, списание кормов, финансы")
+    Container(corp_bi, "Корпоративный BI", "", "Сводная аналитика по растениеводству и животноводству")
+    Container(integration_adapter, "Адаптер интеграции SaaS", "", "Прием Webhooks от SaaS и выгрузка данных по REST API в шину холдинга")
+}
+
+System_Boundary(saas_platform, "Облачная SaaS-платформа (Контур Tenant: agrotech_x)") {
+    Container(saas_gw, "SaaS API Gateway", "", "Точка входа (mTLS для Edge, OAuth2 для API)")
+    Container(saas_core, "SaaS Core & Ingestion", "Java / Go", "Обработка данных ферм АгроТех Х")
+    ContainerDb(saas_tenant_db, "Изолированные БД Tenant: agrotech_x", "PostgreSQL + ClickHouse + S3", "Персональные базы данных и медиаархив холдинга АгроТех Х")
+    Container(saas_webhooks, "SaaS Webhook Service", "Go", "Отправка событий в контур холдинга")
+}
+
+' Работа внутри фермы
+Rel(cameras, edge_server, "RTSP-потоки", "LAN")
+Rel(iot_devices, edge_server, "Телеметрия и команды", "Modbus / MQTT")
+Rel(edge_server, local_op, "Локальные алерты (<5 сек) при обрыве связи", "Local Web / GSM")
+
+' Связь фермы с облачной SaaS-платформой
+Rel(edge_server, saas_gw, "Пакетная синхронизация (паспорт устройства + mTLS сертификат tenant=agrotech_x)", "HTTPS / Kafka TLS")
+Rel(saas_gw, saas_core, "Передача данных в контексте tenant=agrotech_x")
+Rel(saas_core, saas_tenant_db, "Сохранение в изолированную БД АгроТех Х", "JDBC / S3")
+
+' Интеграция SaaS с корпоративными системами АгроТех Х
+Rel(saas_core, saas_webhooks, "Триггер события (напр. истощение корма или гибель животного)")
+Rel(saas_webhooks, integration_adapter, "Push-уведомление (Webhook + HMAC)", "HTTPS POST")
+Rel(integration_adapter, saas_gw, "Периодическая выгрузка сводок по поголовью и расходу кормов", "REST API (GET)")
+Rel(integration_adapter, corp_kafka, "Публикация событий в шину холдинга")
+Rel(corp_kafka, erp_1c, "Автоматическое списание кормов и учет поголовья")
+Rel(corp_kafka, corp_bi, "Передача KPI животноводства для сквозной аналитики холдинга")
+
+@enduml

@@ -1,0 +1,24 @@
+@startuml C2_Isolation_Variant_A_Schemas
+!include ../C4_Component.puml
+
+title C2: Вариант A — Изоляция на уровне схем БД
+
+Person(client_a, "Клиент А (Агрохолдинг)", "Операторы и руководители")
+Person(client_b, "Клиент Б (Фермерское хоз-во)", "Операторы и руководители")
+
+System_Boundary(saas_cloud, "Облачная SaaS-платформа АгроТех Х") {
+    Container(api_gw, "API Gateway & Auth", "Kong / Keycloak / или Spring", "Аутентификация JWT, извлечение tenant_id")
+    Container(core_service, "Core Livestock Service", "Java / Spring Boot", "Общая бизнес-логика, маршрутизация запросов в нужную схему")
+    Container(kafka, "Apache Kafka", "Kafka", "Общие топики с партиционированием по ключу tenant_id")
+    
+    ContainerDb(shared_pg, "Единый кластер PostgreSQL", "PostgreSQL", "Schema: tenant_a (данные А)\nSchema: tenant_b (данные Б)")
+    ContainerDb(shared_ch, "Единый кластер ClickHouse", "ClickHouse", "Общие таблицы с колонкой tenant_id")
+}
+
+Rel(client_a, api_gw, "HTTPS / WSS (JWT: tenant_a)")
+Rel(client_b, api_gw, "HTTPS / WSS (JWT: tenant_b)")
+Rel(api_gw, core_service, "Передача запроса с контекстом тенанта (X-Tenant-ID)")
+Rel(core_service, kafka, "Публикация/чтение событий (key=tenant_id)")
+Rel(core_service, shared_pg, "SET search_path TO tenant_X", "JDBC")
+Rel(core_service, shared_ch, "Запросы с WHERE tenant_id = X", "TCP")
+@enduml

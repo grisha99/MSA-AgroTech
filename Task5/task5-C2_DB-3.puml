@@ -1,0 +1,32 @@
+@startuml C2_Isolation_Variant_C_Silo
+!include ../C4_Component.puml
+
+title C2: Вариант C — Изоляция на уровне инстансов
+
+Person(client_a, "Клиент А", "Фермы Клиента А")
+Person(client_b, "Клиент Б", "Фермы Клиента Б")
+
+System_Boundary(saas_cloud, "Облачная инфраструктура АгроТех Х") {
+    Container(global_lb, "Global Load Balancer", "Nginx / DNS", "Маршрутизация по поддоменам (client-a.agrotech.ru, client-b.agrotech.ru)")
+    Container(control_plane, "Control Plane", "", "Автоматическое развертывание новых инстансов при регистрации")
+    
+    System_Boundary(silo_a, "Выделенный кластер Клиента А") {
+        Container(app_a, "Инстанс приложений А", "K8s Namespace A", "Полный стек микросервисов и Kafka")
+        ContainerDb(db_a, "Выделенные БД А", "PG + ClickHouse", "Отдельные серверы БД")
+    }
+    
+    System_Boundary(silo_b, "Выделенный кластер Клиента Б") {
+        Container(app_b, "Инстанс приложений Б", "K8s Namespace B", "Полный стек микросервисов и Kafka")
+        ContainerDb(db_b, "Выделенные БД Б", "PG + ClickHouse", "Отдельные серверы БД")
+    }
+}
+
+Rel(client_a, global_lb, "client-a.agrotech.ru")
+Rel(client_b, global_lb, "client-b.agrotech.ru")
+Rel(global_lb, app_a, "Весь трафик Клиента А")
+Rel(global_lb, app_b, "Весь трафик Клиента Б")
+Rel(app_a, db_a, "Локальный доступ")
+Rel(app_b, db_b, "Локальный доступ")
+Rel(control_plane, silo_a, "Управление жизненным циклом")
+Rel(control_plane, silo_b, "Управление жизненным циклом")
+@enduml
